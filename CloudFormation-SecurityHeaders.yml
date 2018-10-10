@@ -1,0 +1,137 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Parameters:
+  FunctionNameBase:
+    Type: String
+    Default: origin-response
+    Description: Used for the function name (lambda-origin-response-[domain]-[tld])
+  DomainName:
+    Type: String
+    Default: troop161shoreham
+    Description: The domain (no TLD) we will be operating on to add origin response and security headers
+  DomainTLD:
+    Type: String
+    Default: org
+    Description: The top level domain for the domain we will add origin response to and security headers
+Resources:
+  EdgeExecutionRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service: 
+                - lambda.amazonaws.com
+                - edgelambda.amazonaws.com
+            Action: "sts:AssumeRole"
+      Path: "/"
+      Policies:
+        - PolicyName: SecurityHeadersExecutionPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource: "arn:aws:logs:*:*:*"
+
+  LambdaFunction:
+    Type: "AWS::Lambda::Function"
+    Properties: 
+      Code:
+        ZipFile: !Sub | 
+          'use strict';
+            
+          exports.handler = (event, context, callback) => {
+          
+          const response = event.Records[0].cf.response;
+          const headers = response.headers;
+            
+          response.headers['Strict-Transport-Security'] = [{
+            key: 'Strict-Transport-Security',
+            value: 'max-age=31536000; includeSubDomains; preload',
+          }];
+          response.headers['X-XSS-Protection'] = [{
+            key: 'X-XSS-Protection',
+            value: '1; mode=block',
+          }];
+          response.headers['X-Content-Type-Options'] = [{
+            key: 'X-Content-Type-Options',
+            value: 'nosniff',
+          }];
+          response.headers['X-Frame-Options'] = [{
+            key: 'X-Frame-Options',
+            value: 'SAMEORIGIN',
+          }];
+          response.headers['Referrer-Policy'] = [{
+            key: 'Referrer-Policy',
+            value: 'no-referrer-when-downgrade',
+          }];
+          response.headers['Content-Security-Policy'] = [{
+            key: 'Content-Security-Policy',
+            value: 'upgrade-insecure-requests;',
+          }];
+          callback(null, response);
+          
+          };
+
+      # DeadLetterConfig:
+      #   DeadLetterConfig
+      Description: This function will add required security headers for origin response via CloudFront
+      # Environment:
+      #    Environment
+      FunctionName: !Sub 'lambda-${FunctionNameBase}-${DomainName}-${DomainTLD}'
+      Handler: index.hander
+      # KmsKeyArn: String
+      MemorySize: 128
+      # ReservedConcurrentExecutions: Integer
+      Role: !GetAtt [ EdgeExecutionRole, Arn ]
+      Runtime: nodejs6.10
+      Timeout: 3
+      # TracingConfig:
+      # VpcConfig:
+      # Tags: 
+      #   Resource Tag
+      
+  CloudFrontDistributionResnet:
+    Type: 'AWS::CloudFront::Distribution'
+    Properties:
+      DistributionConfig:
+        Aliases:
+          - www.resnethvac.com
+          - resnethvac.com
+        Enabled: true
+        DefaultRootObject: index.html
+        PriceClass: PriceClass_100
+        DefaultCacheBehavior:
+          TargetOriginId: S3-www.resnethvac.com
+          ViewerProtocolPolicy: redirect-to-https
+          MinTTL: 0
+          AllowedMethods:
+            - HEAD
+            - DELETE
+            - POST
+            - GET
+            - OPTIONS
+            - PUT
+            - PATCH
+          CachedMethods:
+            - HEAD
+            - GET
+          ForwardedValues:
+            Cookies:
+              Forward: none
+        Origins:
+          - DomainName: www.resnethvac.com.s3.amazonaws.com
+            Id: S3-www.resnethvac.com
+            S3OriginConfig: {}
+        Restrictions:
+          GeoRestriction:
+            RestrictionType: none
+            Locations: []
+        ViewerCertificate:
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.1_2016
